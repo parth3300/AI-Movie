@@ -47,6 +47,7 @@ def index():
         action = request.form.get("action")
 
         # 1️⃣ Generate Raw Transcript (SRT → 4 Files)
+        # 1️⃣ Generate Raw Transcript (SRT → 4 Text Files)
         if action == "generate_srt":
             movie_file = request.files.get("movie_file")
             if movie_file:
@@ -64,22 +65,36 @@ def index():
                 if not os.path.exists(srt_path):
                     return "No subtitles found in video."
 
+                # Read and clean .srt file (remove numbering only)
                 with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
-                    raw_text = f.read()
+                    raw_text = f.read().strip()
 
-                # Split into full subtitle parts (not breaking lines)
-                parts = split_srt_by_blocks(raw_text)
+                # Split into subtitle blocks
+                blocks = re.split(r'\n\s*\n', raw_text)
+                cleaned_blocks = []
 
-                # Save each part into a separate file
+                for block in blocks:
+                    lines = block.strip().split("\n")
+                    # Remove numeric index lines like "1", "2", etc.
+                    lines = [l for l in lines if not re.match(r"^\d+$", l.strip())]
+                    if lines:
+                        cleaned_blocks.append("\n".join(lines).strip())
+
+                # Join all cleaned blocks (keeping timestamps)
+                cleaned_srt_text = "\n\n".join(cleaned_blocks)
+
+                # Split into parts (evenly by blocks)
+                parts = split_srt_by_blocks(cleaned_srt_text)
+
                 part_filenames = []
                 for i, part in enumerate(parts, start=1):
-                    part_filename = f"{os.path.splitext(video_filename)[0]}_part{i}.srt"
+                    part_filename = f"{os.path.splitext(video_filename)[0]}_part{i}.txt"
                     part_path = os.path.join(UPLOAD_FOLDER, part_filename)
                     with open(part_path, "w", encoding="utf-8") as f:
                         f.write(part)
                     part_filenames.append(part_filename)
 
-                # Show filenames on page (no automatic download)
+                # Return to frontend with file links
                 return render_template(
                     "index.html",
                     show_tabs=True,
