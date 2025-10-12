@@ -145,6 +145,8 @@ def index():
                 return "Error: No valid timestamps found in transcript."
 
             CLIP_DURATION = 2.5
+            output_files = []
+
             with VideoFileClip(video_path) as video:
                 subclips = []
                 for start_time in entries:
@@ -160,37 +162,49 @@ def index():
 
                     subclips.append(clip)
 
-                final_clip = concatenate_videoclips(subclips, method="compose")
+                # 🎬 Merge clips in groups of 2
+                for i in range(0, len(subclips), 2):
+                    group = subclips[i:i+2]  # Take 2 clips at a time
+                    merged_clip = concatenate_videoclips(group, method="compose")
 
-                trimmed_filename = os.path.splitext(video_filename_input)[0] + "_trimmed.mp4"
-                trimmed_path = os.path.join(UPLOAD_FOLDER, trimmed_filename)
-                # Maintain aspect ratio and force width to even number
-                new_height = 1080
-                new_width = int(final_clip.w * (new_height / final_clip.h))
+                    trimmed_filename = f"{os.path.splitext(video_filename_input)[0]}_part_{(i//2)+1}.mp4"
+                    trimmed_path = os.path.join(UPLOAD_FOLDER, trimmed_filename)
 
-                # Ensure width is divisible by 2
-                if new_width % 2 != 0:
-                    new_width += 1
+                    # Maintain aspect ratio and even width
+                    new_height = 1080
+                    new_width = int(merged_clip.w * (new_height / merged_clip.h))
+                    if new_width % 2 != 0:
+                        new_width += 1
+                    merged_clip = merged_clip.resize(newsize=(new_width, new_height))
 
-                final_clip = final_clip.resize(newsize=(new_width, new_height))
+                    logger = FlaskProgressLogger()
+                    merged_clip.write_videofile(
+                        trimmed_path,
+                        codec="libx264",
+                        temp_audiofile="temp-audio.m4a",
+                        audio=False,  # No audio
+                        remove_temp=True,
+                        ffmpeg_params=["-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p"],
+                        threads=4,
+                        fps=30,
+                        logger=logger
+                    )
 
-                logger = FlaskProgressLogger()
-                final_clip.write_videofile(
-                    trimmed_path,
-                    codec="libx264",
-                    temp_audiofile="temp-audio.m4a",
-                    audio=False,       # ❌ Important: disables audio
-                    remove_temp=True,
-                    ffmpeg_params=["-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p"],
-                    threads=4,
-                    fps=30,
-                    logger=logger
-                )
+                    output_files.append(trimmed_path)
+                    merged_clip.close()
 
-
-
-
-            return send_file(trimmed_path, as_attachment=True)
+            # ✅ Option 1: Return first file for now (you can zip them later)
+            if len(output_files) == 1:
+                return send_file(output_files[0], as_attachment=True)
+            else:
+                # Or return as a zip file
+                import zipfile
+                zip_filename = os.path.splitext(video_filename_input)[0] + "_clips.zip"
+                zip_path = os.path.join(UPLOAD_FOLDER, zip_filename)
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    for f in output_files:
+                        zipf.write(f, os.path.basename(f))
+                return send_file(zip_path, as_attachment=True)
 
     # Default response
     return {"message": "Use POST / with 'action=generate_srt' or 'action=trim'"}

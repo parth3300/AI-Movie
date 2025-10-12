@@ -25,60 +25,81 @@
 
   <div id="response">Server response will appear here...</div>
 
-  <script>
-    const responseDiv = document.getElementById("response");
+<script>
+  const responseDiv = document.getElementById("response");
 
-    // 🧩 Generate SRT parts
-    document.getElementById("generateSRT").addEventListener("click", async () => {
-      responseDiv.innerText = "⏳ Generating SRT files from Colab...";
-      try {
-        const res = await axios.post("/generate_srt");
-        const data = res.data;
+  // 🧩 Generate SRT parts (unchanged)
+  document.getElementById("generateSRT").addEventListener("click", async () => {
+    responseDiv.innerText = "⏳ Generating SRT files from Colab...";
+    try {
+      const res = await axios.post("/generate_srt");
+      const data = res.data;
 
-        if (data.error) {
-          responseDiv.innerText = "Error: " + data.error;
-          return;
-        }
-
-        responseDiv.innerHTML = "<h3>✅ SRT Parts Generated:</h3>";
-        data.files.forEach((fileUrl, i) => {
-          const a = document.createElement("a");
-          a.href = fileUrl;
-          a.className = "download-link";
-          a.textContent = `Download SRT Part ${i + 1}`;
-          responseDiv.appendChild(a);
-        });
-      } catch (err) {
-        responseDiv.innerText = "Error: " + (err.response?.data?.error || err.message);
-      }
-    });
-
-    // ✂️ Trim video feature
-    document.getElementById("trimVideo").addEventListener("click", async () => {
-      const transcript = document.getElementById("transcriptText").value.trim();
-      if (!transcript) {
-        responseDiv.innerText = "⚠️ Please enter transcript timestamps first!";
+      if (data.error) {
+        responseDiv.innerText = "Error: " + data.error;
         return;
       }
 
-      responseDiv.innerText = "⏳ Trimming video...";
-      try {
-        const res = await axios.post("/trim", { transcript_text: transcript }, { responseType: 'blob' });
+      responseDiv.innerHTML = "<h3>✅ SRT Parts Generated:</h3>";
+      data.files.forEach((fileUrl, i) => {
+        const a = document.createElement("a");
+        a.href = fileUrl;
+        a.className = "download-link";
+        a.textContent = `Download SRT Part ${i + 1}`;
+        responseDiv.appendChild(a);
+      });
+    } catch (err) {
+      responseDiv.innerText = "Error: " + (err.response?.data?.error || err.message);
+    }
+  });
 
-        // Create download link for trimmed video
+  // ✂️ Trim video feature (updated)
+  document.getElementById("trimVideo").addEventListener("click", async () => {
+    const transcript = document.getElementById("transcriptText").value.trim();
+    if (!transcript) {
+      responseDiv.innerText = "⚠️ Please enter transcript timestamps first!";
+      return;
+    }
+
+    const timestamps = transcript.split("\n").filter(line => line.trim() !== "");
+    if (timestamps.length === 0) {
+      responseDiv.innerText = "⚠️ No valid timestamps found!";
+      return;
+    }
+
+    responseDiv.innerHTML = "⏳ Processing clips one by one...<br>";
+
+    // Process 2 timestamps per request
+    for (let i = 0; i < timestamps.length; i += 2) {
+      const pair = timestamps.slice(i, i + 2).join("\n");
+
+      responseDiv.innerHTML += `➡️ Processing clip group ${Math.floor(i / 2) + 1}...<br>`;
+      
+      try {
+        const res = await axios.post(
+          "/trim",
+          { transcript_text: pair },
+          { responseType: "blob" }
+        );
+
+        // 🧩 Create download link for each clip
         const url = window.URL.createObjectURL(new Blob([res.data]));
         const a = document.createElement("a");
         a.href = url;
-        a.download = "trimmed_video.mp4";
+        a.download = `clip_group_${Math.floor(i / 2) + 1}.mp4`;
         document.body.appendChild(a);
         a.click();
         a.remove();
 
-        responseDiv.innerText = "✅ Trimmed video downloaded!";
+        responseDiv.innerHTML += `✅ Downloaded clip group ${Math.floor(i / 2) + 1}<br>`;
       } catch (err) {
-        responseDiv.innerText = "Error: " + (err.response?.data?.error || err.message);
+        responseDiv.innerHTML += `❌ Error on group ${Math.floor(i / 2) + 1}: ${err.message}<br>`;
       }
-    });
-  </script>
+    }
+
+    responseDiv.innerHTML += "<h3>🎉 All clips processed and downloaded!</h3>";
+  });
+</script>
+
 </body>
 </html>
