@@ -1,207 +1,120 @@
-from flask import Flask, request, render_template, send_file
-import os
-import random
-import re
-from proglog import ProgressBarLogger
-from werkzeug.utils import secure_filename
-from moviepy import VideoFileClip, VideoClip, concatenate_videoclips
-from moviepy.video.fx.FadeIn import FadeIn
-from moviepy.video.fx.FadeOut import FadeOut
-from moviepy.video.fx.MultiplySpeed import MultiplySpeed
+from flask import Flask, request, send_file, jsonify, render_template, send_from_directory
+from flask_cors import CORS
+from io import BytesIO
+import requests
+import os       # ✅ Needed for file paths, directories, etc.
 
 app = Flask(__name__)
+CORS(app)  # allow frontend requests
+
+app = Flask(__name__)
+UPLOAD_FOLDER = "downloads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Remote ngrok URL
+NGROK_URL = "https://filosus-impartibly-contessa.ngrok-free.dev/"
+
+# Video name already on server
+VIDEO_NAME = "Joker.mp4"
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+
+
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-from PIL import Image
-from moviepy.video import fx as vfx
-from moviepy.video.io.ffmpeg_writer import ffmpeg_write_video
-from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
-from moviepy.tools import subprocess_call
 
 
-def split_srt_by_blocks(srt_text, num_parts=4):
-    """Split .srt into full subtitle blocks evenly (not cutting lines)."""
-    blocks = re.split(r'\n\s*\n', srt_text.strip())
-    total_blocks = len(blocks)
-    per_part = total_blocks // num_parts
-    parts = []
+@app.route("/generate_srt", methods=["POST"])
+def generate_srt():
+    data = {"action": "srt", "video_filename": VIDEO_NAME}
 
-    for i in range(num_parts):
-        start = i * per_part
-        end = (i + 1) * per_part if i < num_parts - 1 else total_blocks
-        joined = "\n\n".join(blocks[start:end]).strip()
-        parts.append(joined)
-    return parts
+    try:
+        response = requests.post(NGROK_URL, data=data)
+        content_type = response.headers.get("content-type", "")
 
+        # 🧠 Case 1: JSON response from Colab
+        if "application/json" in content_type:
+            response_json = response.json()
 
-class FlaskProgressLogger(ProgressBarLogger):
-    def callback(self, **changes):
-        if changes.get("progress"):
-            # Save progress percentage (0–100)
-            progress["percent"] = int(changes["progress"] * 100)
+        # 🧠 Case 2: Plain text response (e.g., error or log)
+        elif "text" in content_type or response.text.strip().startswith("{"):
+            try:
+                response_json = json.loads(response.text)
+            except Exception:
+                return jsonify({"error": "Unexpected text response from Colab", "content": response.text}), 500
 
+        # 🧠 Case 3: Empty or non-JSON (likely ffmpeg issue)
+        else:
+            return jsonify({"error": "Colab did not return valid JSON", "status": response.status_code, "body": response.text[:200]}), 500
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        action = request.form.get("action")
+        if "error" in response_json:
+            return jsonify({"error": response_json["error"]}), 500
 
-        # 1️⃣ Generate Raw Transcript (SRT → 4 Files)
-        # 1️⃣ Generate Raw Transcript (SRT → 4 Text Files)
-        if action == "generate_srt":
-            movie_file = request.files.get("movie_file")
-            if movie_file:
-                video_filename = secure_filename(movie_file.filename)
-                video_path = os.path.join(UPLOAD_FOLDER, video_filename)
-                movie_file.save(video_path)
+        # ✅ Now safely download all part files
+        local_files = []
+        for part_file in response_json.get("parts_created", []):
+            file_url = f"{NGROK_URL}download/{part_file}"
+            file_resp = requests.get(file_url, stream=True)
+            if file_resp.status_code != 200:
+                return jsonify({"error": f"Could not download {part_file} from Colab"}), 500
 
-                srt_filename = os.path.splitext(video_filename)[0] + ".srt"
-                srt_path = os.path.join(UPLOAD_FOLDER, srt_filename)
+            local_path = os.path.join(UPLOAD_FOLDER, part_file)
+            with open(local_path, "wb") as f:
+                for chunk in file_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            local_files.append(part_file)
 
-                # Extract subtitles using ffmpeg
-                cmd = f'ffmpeg -y -i "{video_path}" -map 0:s:0 "{srt_path}"'
-                os.system(cmd)
+        # ✅ Return downloadable local links to frontend
+        download_links = [f"/download/{f}" for f in local_files]
+        return jsonify({"files": download_links})
 
-                if not os.path.exists(srt_path):
-                    return "No subtitles found in video."
-
-                # Read and clean .srt file (remove numbering only)
-                with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
-                    raw_text = f.read().strip()
-
-                # Split into subtitle blocks
-                blocks = re.split(r'\n\s*\n', raw_text)
-                cleaned_blocks = []
-
-                for block in blocks:
-                    lines = block.strip().split("\n")
-                    # Remove numeric index lines like "1", "2", etc.
-                    lines = [l for l in lines if not re.match(r"^\d+$", l.strip())]
-                    if lines:
-                        cleaned_blocks.append("\n".join(lines).strip())
-
-                # Join all cleaned blocks (keeping timestamps)
-                cleaned_srt_text = "\n\n".join(cleaned_blocks)
-
-                # Split into parts (evenly by blocks)
-                parts = split_srt_by_blocks(cleaned_srt_text)
-
-                part_filenames = []
-                for i, part in enumerate(parts, start=1):
-                    part_filename = f"{os.path.splitext(video_filename)[0]}_part{i}.txt"
-                    part_path = os.path.join(UPLOAD_FOLDER, part_filename)
-                    with open(part_path, "w", encoding="utf-8") as f:
-                        f.write(part)
-                    part_filenames.append(part_filename)
-
-                # Return to frontend with file links
-                return render_template(
-                    "index.html",
-                    show_tabs=True,
-                    part_files=part_filenames,
-                    video_filename=video_filename,
-                )
-
-        # 2️⃣ Trim Video using pasted transcript
-        elif action == "trim":
-            transcript_text = request.form.get("transcript_text")
-            video_filename_input = request.form.get("video_filename")
-
-            video_path = os.path.join(UPLOAD_FOLDER, secure_filename(video_filename_input))
-            if not os.path.exists(video_path):
-                return f"Error: Video file not found: {video_filename_input}"
-
-            # Parse transcript timestamps
-            lines = transcript_text.strip().split("\n")
-            entries = []
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                match = re.match(r"(\d{2}):(\d{2}):(\d{2}),?(\d{0,3})?", line)
-                if match:
-                    h, m, s, ms = match.groups()
-                    ms = int(ms) / 1000 if ms else 0
-                    seconds = int(h) * 3600 + int(m) * 60 + int(s) + ms
-                    entries.append(seconds)
-
-            if not entries:
-                return "Error: No valid timestamps found in transcript."
-
-            CLIP_DURATION = 2.5
-            with VideoFileClip(video_path) as video:
-                video = vfx.MirrorX().apply(video)
-                # # Width and height of the crop
-                # crop_width = 600
-                # crop_height = 300
-
-                # # Slightly left of center (e.g., 100 pixels to the left)
-                # x_center = (clip.w / 2) + 100  
-                # y_center = clip.h / 2  # keep vertical center
-
-                # clip = Crop(
-                #     x_center=x_center,
-                #     y_center=y_center,
-                #     width=crop_width,
-                #     height=crop_height
-                # ).apply(clip)     
-                subclips = []
-                transitions = [
-                    lambda c: FadeIn(duration=0.5).apply(FadeOut(duration=0.5).apply(c)),
-                ]
-
-                for start_time in entries:
-                    start = start_time + 2  # optional offset
-                    end = min(start + CLIP_DURATION, video.duration)
-                    clip = video.subclipped(start, end)
-                    # 1️⃣ Slow the clip to 0.5x speed
-                    clip = MultiplySpeed(factor=0.5).apply(clip)
-                    clip.preview()
-
-                    # 3️⃣ Apply random transition effect
-                    effect = random.choice(transitions)
-                    subclips.append(effect(clip))
-
-                final_clip = concatenate_videoclips(subclips, method="compose")
-
-                trimmed_filename = os.path.splitext(video_filename_input)[0] + "_trimmed.mp4"
-                trimmed_path = os.path.join(UPLOAD_FOLDER, trimmed_filename)
-                
-                #  Delete uploaded video 
-                try: 
-                    os.remove(video_path) 
-                except Exception: 
-                    pass
-
-                logger = FlaskProgressLogger()
-
-                final_clip.write_videofile(
-                    trimmed_path,
-                    codec="libx264",
-                    audio_codec="aac",
-                    threads=4,
-                    fps=video.fps or 30,
-                    logger=logger
-                )
-
-            return send_file(trimmed_path, as_attachment=True)
-
-    return render_template("index.html", show_tabs=False)
-
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/download/<filename>")
 def download_file(filename):
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    if os.path.exists(filepath):
-        return send_file(filepath, as_attachment=True)
-    else:
-        return "File not found.", 404
-    
-@app.route("/progress")
-def get_progress():
-    return {"percent": 100}
+    """Serve downloaded SRT parts"""
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+@app.route("/trim", methods=["POST"])
+def trim_video():
+    """
+    Call remote server to trim video.
+    Expects `transcript_text` in JSON body from frontend.
+    """
+    json_data = request.get_json()
+    transcript_text = json_data.get("transcript_text", "")
+
+    data = {
+        "action": "trim",
+        "video_filename": VIDEO_NAME,
+        "transcript_text": transcript_text
+    }
+
+    try:
+        response = requests.post(NGROK_URL, data=data, stream=True)
+
+        if "video/mp4" in response.headers.get("Content-Type", ""):
+            # Send video as downloadable file
+            video_stream = BytesIO(response.content)
+            return send_file(
+                video_stream,
+                mimetype="video/mp4",
+                as_attachment=True,
+                download_name="trimmed_video.mp4"
+            )
+        else:
+            # Otherwise, return server message
+            return (response.content, response.status_code, response.headers.items())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Use Render's PORT or default 5000
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000, debug=True)
