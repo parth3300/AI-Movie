@@ -12,6 +12,8 @@ from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
 
 # ✅ Ngrok for Colab tunnel
 from pyngrok import ngrok
+import subprocess
+import json
 
 # Flask setup
 app = Flask(__name__)
@@ -55,54 +57,70 @@ def index():
     print(request.method)
     print(request.form.get("action"))
     print("hi3")
-    
+
     if request.method == "POST":
         action = request.form.get("action")
 
-        # 1️⃣ Extract and Split Subtitles
-        if action == "generate_srt":
-            movie_file = request.files.get("movie_file")
-            if movie_file:
-                video_filename = secure_filename(movie_file.filename)
-                video_path = os.path.join(UPLOAD_FOLDER, video_filename)
-                movie_file.save(video_path)
+        if action == "srt":
+            video_filename_input = request.form.get("video_filename")
+            video_path = os.path.join(UPLOAD_FOLDER, video_filename_input)
+            srt_filename = os.path.splitext(video_filename_input)[0] + ".srt"
+            srt_path = os.path.join(UPLOAD_FOLDER, srt_filename)
 
-                srt_filename = os.path.splitext(video_filename)[0] + ".srt"
-                srt_path = os.path.join(UPLOAD_FOLDER, srt_filename)
+            # 1️⃣ Find the subrip (text) subtitle stream
+            cmd_probe = [
+                "ffprobe", "-v", "error", "-select_streams", "s",
+                "-show_entries", "stream=index,codec_name", "-of", "json",
+                video_path
+            ]
+            probe_result = subprocess.run(cmd_probe, capture_output=True, text=True)
+            streams = json.loads(probe_result.stdout).get("streams", [])
 
-                # Extract subtitles using ffmpeg
-                cmd = f'ffmpeg -y -i "{video_path}" -map 0:s:0 "{srt_path}"'
-                os.system(cmd)
+            text_stream_index = None
+            for stream in streams:
+                if stream.get("codec_name") == "subrip":  # text-based SRT
+                    text_stream_index = stream["index"]
+                    break
 
-                if not os.path.exists(srt_path):
-                    return "No subtitles found in video."
+            if text_stream_index is None:
+                return {"error": "No text-based subtitle stream found."}
 
-                with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
-                    raw_text = f.read().strip()
+            # 2️⃣ Extract SRT
+            cmd_extract = f'ffmpeg -y -i "{video_path}" -map 0:{text_stream_index} "{srt_path}"'
+            os.system(cmd_extract)
 
-                # Clean up SRT (remove numbering)
-                blocks = re.split(r'\n\s*\n', raw_text)
-                cleaned_blocks = []
-                for block in blocks:
-                    lines = block.strip().split("\n")
-                    lines = [l for l in lines if not re.match(r"^\d+$", l.strip())]
-                    if lines:
-                        cleaned_blocks.append("\n".join(lines).strip())
+            # 3️⃣ Read SRT and clean
+            if not os.path.exists(srt_path):
+                return {"error": "Failed to create SRT file."}
 
-                cleaned_srt_text = "\n\n".join(cleaned_blocks)
-                parts = split_srt_by_blocks(cleaned_srt_text)
+            with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
+                raw_text = f.read().strip()
 
-                part_filenames = []
-                for i, part in enumerate(parts, start=1):
-                    part_filename = f"{os.path.splitext(video_filename)[0]}_part{i}.txt"
-                    part_path = os.path.join(UPLOAD_FOLDER, part_filename)
-                    with open(part_path, "w", encoding="utf-8") as f:
-                        f.write(part)
-                    part_filenames.append(part_filename)
+            blocks = re.split(r'\n\s*\n', raw_text)
+            cleaned_blocks = []
+            for block in blocks:
+                lines = block.strip().split("\n")
+                lines = [l for l in lines if not re.match(r"^\d+$", l.strip())]  # remove numbering
+                if lines:
+                    cleaned_blocks.append("\n".join(lines).strip())
 
-                # No template rendering in Colab – show list in plain text
-                return {"parts_created": part_filenames}
+            cleaned_srt_text = "\n\n".join(cleaned_blocks)
+            parts = split_srt_by_blocks(cleaned_srt_text)
 
+            # 4️⃣ Save each part
+            part_filenames = []
+            for i, part in enumerate(parts, start=1):
+                part_filename = f"{os.path.splitext(video_filename_input)[0]}_part{i}.txt"
+                part_path = os.path.join(UPLOAD_FOLDER, part_filename)
+                with open(part_path, "w", encoding="utf-8") as f:
+                    f.write(part)
+                part_filenames.append(part_filename)
+
+            # Sample for verification
+            sample_lines = "\n".join(parts[0].split("\n")[:5])
+            print("Sample of first SRT part:\n", sample_lines)
+
+            return {"parts_created": part_filenames, "sample_first_part": sample_lines}
         # 2️⃣ Trim Video based on transcript
         elif action == "trim":
             transcript_text = request.form.get("transcript_text")
