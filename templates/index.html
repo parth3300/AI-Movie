@@ -25,81 +25,94 @@
 
   <div id="response">Server response will appear here...</div>
 
-<script>
-  const responseDiv = document.getElementById("response");
+  <script>
+    const responseDiv = document.getElementById("response");
 
-  // 🧩 Generate SRT parts (unchanged)
-  document.getElementById("generateSRT").addEventListener("click", async () => {
-    responseDiv.innerText = "⏳ Generating SRT files from Colab...";
-    try {
-      const res = await axios.post("/generate_srt");
-      const data = res.data;
+    // 🧩 Generate SRT parts
+    document.getElementById("generateSRT").addEventListener("click", async () => {
+      responseDiv.innerText = "⏳ Generating SRT files from Colab...";
+      try {
+        const res = await axios.post("/generate_srt");
+        const data = res.data;
 
-      if (data.error) {
-        responseDiv.innerText = "Error: " + data.error;
+        if (data.error) {
+          responseDiv.innerText = "Error: " + data.error;
+          return;
+        }
+
+        responseDiv.innerHTML = "<h3>✅ SRT Parts Generated:</h3>";
+        data.files.forEach((fileUrl, i) => {
+          const a = document.createElement("a");
+          a.href = fileUrl;
+          a.className = "download-link";
+          a.textContent = `Download SRT Part ${i + 1}`;
+          responseDiv.appendChild(a);
+        });
+      } catch (err) {
+        responseDiv.innerText = "Error: " + (err.response?.data?.error || err.message);
+      }
+    });
+
+    // ✂️ Trim video with retry mechanism
+    document.getElementById("trimVideo").addEventListener("click", async () => {
+      const transcript = document.getElementById("transcriptText").value.trim();
+      if (!transcript) {
+        responseDiv.innerText = "⚠️ Please enter transcript timestamps first!";
         return;
       }
 
-      responseDiv.innerHTML = "<h3>✅ SRT Parts Generated:</h3>";
-      data.files.forEach((fileUrl, i) => {
-        const a = document.createElement("a");
-        a.href = fileUrl;
-        a.className = "download-link";
-        a.textContent = `Download SRT Part ${i + 1}`;
-        responseDiv.appendChild(a);
-      });
-    } catch (err) {
-      responseDiv.innerText = "Error: " + (err.response?.data?.error || err.message);
-    }
-  });
-
-  // ✂️ Trim video feature (updated)
-  document.getElementById("trimVideo").addEventListener("click", async () => {
-    const transcript = document.getElementById("transcriptText").value.trim();
-    if (!transcript) {
-      responseDiv.innerText = "⚠️ Please enter transcript timestamps first!";
-      return;
-    }
-
-    const timestamps = transcript.split("\n").filter(line => line.trim() !== "");
-    if (timestamps.length === 0) {
-      responseDiv.innerText = "⚠️ No valid timestamps found!";
-      return;
-    }
-
-    responseDiv.innerHTML = "⏳ Processing clips one by one...<br>";
-
-    // Process 2 timestamps per request
-    for (let i = 0; i < timestamps.length; i += 2) {
-      const pair = timestamps.slice(i, i + 2).join("\n");
-
-      responseDiv.innerHTML += `➡️ Processing clip group ${Math.floor(i / 2) + 1}...<br>`;
-      
-      try {
-        const res = await axios.post(
-          "/trim",
-          { transcript_text: pair },
-          { responseType: "blob" }
-        );
-
-        // 🧩 Create download link for each clip
-        const url = window.URL.createObjectURL(new Blob([res.data]));
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `clip_group_${Math.floor(i / 2) + 1}.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-
-        responseDiv.innerHTML += `✅ Downloaded clip group ${Math.floor(i / 2) + 1}<br>`;
-      } catch (err) {
-        responseDiv.innerHTML += `❌ Error on group ${Math.floor(i / 2) + 1}: ${err.message}<br>`;
+      const timestamps = transcript.split("\n").filter(line => line.trim() !== "");
+      if (timestamps.length === 0) {
+        responseDiv.innerText = "⚠️ No valid timestamps found!";
+        return;
       }
-    }
 
-    responseDiv.innerHTML += "<h3>🎉 All clips processed and downloaded!</h3>";
-  });
-</script>
+      responseDiv.innerHTML = "⏳ Processing clips one by one...<br>";
 
+      for (let i = 0; i < timestamps.length; i += 2) {
+        const pair = timestamps.slice(i, i + 2).join("\n");
+        const groupNum = Math.floor(i / 2) + 1;
+        let success = false;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            responseDiv.innerHTML += `➡️ Processing clip group ${groupNum} (Attempt ${attempt})...<br>`;
+            
+            const res = await axios.post(
+              "/trim",
+              { transcript_text: pair },
+              { responseType: "blob" }
+            );
+
+            // 🧩 Create download link for each successful clip
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `clip_group_${groupNum}.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+
+            responseDiv.innerHTML += `✅ Downloaded clip group ${groupNum} successfully on attempt ${attempt}<br>`;
+            success = true;
+            break;
+          } catch (err) {
+            responseDiv.innerHTML += `⚠️ Attempt ${attempt} failed for group ${groupNum}: ${err.message}<br>`;
+            if (attempt < 3) {
+              responseDiv.innerHTML += `🔁 Retrying group ${groupNum}...<br>`;
+            } else {
+              responseDiv.innerHTML += `❌ Failed to process group ${groupNum} after 3 attempts.<br>`;
+            }
+          }
+        }
+
+        if (!success) {
+          responseDiv.innerHTML += `🚫 Skipping group ${groupNum} due to repeated failures.<br>`;
+        }
+      }
+
+      responseDiv.innerHTML += "<h3>🎉 All clips processed and downloaded (with retries)!</h3>";
+    });
+  </script>
 </body>
 </html>
