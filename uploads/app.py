@@ -222,12 +222,21 @@ def download_file(filename):
 def get_progress():
     return {"percent": progress.get("percent", 0)}
 
+import threading
+import time
 
-# -------------------------------------------------------
-# 🚀 Start Flask with Ngrok Tunnel (for Colab)
-# -------------------------------------------------------
-if __name__ == "__main__":
+def run_flask():
     port = 5000
     public_url = ngrok.connect(port)
     print("🔥 Public URL:", public_url)
     app.run(host="0.0.0.0", port=port)
+
+thread = threading.Thread(target=run_flask)
+thread.start()
+
+# Keep process alive manually
+while True:
+    time.sleep(60)
+
+print("✅ Keepalive script running. Now start your Flask cell.")
+

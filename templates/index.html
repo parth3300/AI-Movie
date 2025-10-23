@@ -76,7 +76,7 @@
 
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            responseDiv.innerHTML += `➡️ Processing clip group ${groupNum} (Attempt ${attempt})...<br>`;
+            responseDiv.innerHTML += `➡️ Processing clip group ${groupNum} / ${timestamps.length/2} (Attempt ${attempt})...<br>`;
             
             const res = await axios.post(
               "/trim",
