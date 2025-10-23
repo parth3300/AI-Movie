@@ -12,7 +12,9 @@ UPLOAD_FOLDER = "downloads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Remote ngrok URL
-NGROK_URL = "https://filosus-impartibly-contessa.ngrok-free.dev/"
+# NGROK_URL = "https://filosus-impartibly-contessa.ngrok-free.dev/"
+
+NGROK_URL = "https://innocently-nonsustained-bari.ngrok-free.dev/"
 
 # Video name already on server
 VIDEO_NAME = "Joker.mp4"
