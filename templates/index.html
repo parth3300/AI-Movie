@@ -54,67 +54,86 @@
       }
     });
 
-    // ✂️ Trim video with retry mechanism (4 timestamps per group)
-    document.getElementById("trimVideo").addEventListener("click", async () => {
-      const transcript = document.getElementById("transcriptText").value.trim();
-      if (!transcript) {
-        responseDiv.innerText = "⚠️ Please enter transcript timestamps first!";
-        return;
-      }
+  function logMessage(message, type = "info") {
+    const p = document.createElement("p");
+    p.textContent = message;
+    if (type === "success") p.style.color = "green";
+    if (type === "error") p.style.color = "red";
+    if (type === "warn") p.style.color = "orange";
+    if (type === "title") {
+      p.style.fontWeight = "bold";
+      p.style.marginTop = "10px";
+    }
+    responseDiv.appendChild(p);
+    responseDiv.scrollTop = responseDiv.scrollHeight; // auto-scroll to bottom
+  }
 
-      const timestamps = transcript.split("\n").filter(line => line.trim() !== "");
-      if (timestamps.length === 0) {
-        responseDiv.innerText = "⚠️ No valid timestamps found!";
-        return;
-      }
+  // ✂️ Trim video with retry mechanism (4 timestamps per group)
+  document.getElementById("trimVideo").addEventListener("click", async () => {
+    const transcript = document.getElementById("transcriptText").value.trim();
+    if (!transcript) {
+      responseDiv.innerText = "⚠️ Please enter transcript timestamps first!";
+      return;
+    }
 
-      responseDiv.innerHTML = "⏳ Processing clips one by one (4 lines per group)...<br>";
+    const timestamps = transcript.split("\n").filter(line => line.trim() !== "");
+    if (timestamps.length === 0) {
+      responseDiv.innerText = "⚠️ No valid timestamps found!";
+      return;
+    }
 
-      // Group of 4 lines (2 clips per group)
-      for (let i = 0; i < timestamps.length; i += 4) {
-        const group = timestamps.slice(i, i + 4).join("\n");
-        const groupNum = Math.floor(i / 4) + 1;
-        let success = false;
+    responseDiv.innerHTML = "⏳ Processing clips one by one (4 lines per group)...<br>";
 
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            responseDiv.innerHTML += `➡️ Processing clip group ${groupNum} / ${Math.ceil(timestamps.length / 4)} (Attempt ${attempt})...<br>`;
+    const totalGroups = Math.ceil(timestamps.length / 4);
 
-            const res = await axios.post(
-              "/trim",
-              { transcript_text: group },
-              { responseType: "blob" }
-            );
+    for (let i = 0; i < timestamps.length; i += 4) {
+      const group = timestamps.slice(i, i + 4).join("\n");
+      const groupNum = Math.floor(i / 4) + 1;
+      let success = false;
 
-            // 🧩 Create download link for each successful clip
-            const url = window.URL.createObjectURL(new Blob([res.data]));
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `clip_group_${groupNum}.mp4`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
+      logMessage(`🎬 Processing clip group ${groupNum} / ${totalGroups}...`, "title");
 
-            responseDiv.innerHTML += `✅ Downloaded clip group ${groupNum} successfully on attempt ${attempt}<br>`;
-            success = true;
-            break;
-          } catch (err) {
-            responseDiv.innerHTML += `⚠️ Attempt ${attempt} failed for group ${groupNum}: ${err.message}<br>`;
-            if (attempt < 3) {
-              responseDiv.innerHTML += `🔁 Retrying group ${groupNum}...<br>`;
-            } else {
-              responseDiv.innerHTML += `❌ Failed to process group ${groupNum} after 3 attempts.<br>`;
-            }
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          logMessage(`➡️ Attempt ${attempt} for group ${groupNum}...`);
+
+          const res = await axios.post("/trim", { transcript_text: group }, { responseType: "blob" });
+
+          // 🧩 Create download link for each successful clip
+          const url = window.URL.createObjectURL(new Blob([res.data]));
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `clip_group_${groupNum}.mp4`;
+          a.style.display = "none";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+
+          logMessage(`✅ Group ${groupNum} downloaded successfully on attempt ${attempt}`, "success");
+          success = true;
+          break;
+        } catch (err) {
+          logMessage(`⚠️ Attempt ${attempt} failed for group ${groupNum}: ${err.message}`, "warn");
+          if (attempt < 3) {
+            logMessage(`🔁 Retrying group ${groupNum}...`);
+          } else {
+            logMessage(`❌ Failed to process group ${groupNum} after 3 attempts.`, "error");
           }
         }
 
-        if (!success) {
-          responseDiv.innerHTML += `🚫 Skipping group ${groupNum} due to repeated failures.<br>`;
-        }
+        // Force UI refresh after each iteration
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
 
-      responseDiv.innerHTML += "<h3>🎉 All clip groups processed and downloaded (4 lines per group, with retries)!</h3>";
-    });
+      if (!success) {
+        logMessage(`🚫 Skipping group ${groupNum} due to repeated failures.`, "error");
+      }
+
+      logMessage(`-------------------------------`);
+    }
+
+    logMessage(`🎉 All ${totalGroups} clip groups processed and downloaded!`, "success");
+  });
   </script>
 </body>
 </html>

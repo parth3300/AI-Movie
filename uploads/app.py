@@ -133,6 +133,7 @@ def index():
             # Parse timestamps
             lines = transcript_text.strip().split("\n")
             entries = []
+            subclips = []
             for line in lines:
                 match = re.match(r"(\d{2}):(\d{2}):(\d{2}),?(\d{0,3})?", line.strip())
                 if match:
@@ -153,14 +154,26 @@ def index():
                     clip = video.subclip(start, end)
 
                     # 🎥 Apply effects
-                    clip = vfx.speedx(clip, 0.6)
+                    # clip = vfx.speedx(clip, 0.6)
                     clip = vfx.mirror_x(clip)
                     clip = vfx.fadein(clip, 0.5)
                     clip = vfx.fadeout(clip, 0.5)
 
                     subclips.append(clip)
-
-                final_clip = concatenate_videoclips(subclips, method="compose")
+                # ✅ Now reorder clips like pattern 1,2,1,3,4,3
+                if len(subclips) >= 4:
+                    reordered = [
+                        subclips[0],  # 1
+                        subclips[1],  # 2
+                        subclips[0],  # 1 again
+                        subclips[2],  # 3
+                        subclips[3],  # 4
+                        subclips[2],  # 3 again
+                    ]
+                else:
+                    # fallback for fewer clips
+                    reordered = subclips
+                final_clip = concatenate_videoclips(reordered, method="compose")
 
                 trimmed_filename = os.path.splitext(video_filename_input)[0] + "_trimmed.mp4"
                 trimmed_path = os.path.join(UPLOAD_FOLDER, trimmed_filename)
